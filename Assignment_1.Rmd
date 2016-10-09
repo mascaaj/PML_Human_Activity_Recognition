@@ -1,0 +1,323 @@
+---
+title: "ML_Assignment"
+author: "Aloke Mascarenhas"
+date: "October 7, 2016"
+output: html_document
+---
+## Activity Recognition 
+#### Practical Machine Learning Assignment -  Sept / Oct 2016
+
+##Synopsis :
+The aim of this study is to accurately be able to quanitfy correctness of an activity. The used in this study is from the UCI-HAR library and is focused on dumbell lifts.
+[link](http://groupware.les.inf.puc-rio.br/har)
+
+We will do the following in this study :
+
+1. Brief EDA of the data to understand what the structure is like
+
+2. Clean the data
+
+3. Train ML classifiers and select the best ones based metrics
+
+4. Predict activities based on the data in the testing set.
+
+_Note : Summary and EDA outputs have been set to eval=FALSE to reduce verbose output, please select eval=TRUE to view the output_
+
+##Initialize & EDA
+
+Initialize libraries used in analysis
+
+```{r}
+library(caret)
+library(AppliedPredictiveModeling)
+library(dplyr)
+```
+
+Read in data and set seed
+
+```{r}
+setwd("C:/Documents/Coursera/CS_8_ML_NST/Assignment")
+data_0<-read.csv("pml-training.csv")
+testing_0<-read.csv("pml-testing.csv")
+```
+
+EDA on the data
+
+```{r,eval=FALSE}
+head(data_0)
+str(data_0)
+summary(data_0)
+```
+
+From the inital look at the data we can see that :
+
+1. The first few columns (1:7) have username, timestamp and window with might not be useful to the learning algorithms. These can be omitted
+
+2. The data has many NA values which offer us 2 choices in processing the data
+
+    a. Omit the NA values before using the training algorithm.
+    
+    b. Omit them with the preProcess command from caret.
+
+
+## Data Cleaning
+
+```{r}
+data_1<-data_0[,-c(1:7)]
+naMean <- function(x){
+  mean(is.na(x))
+}
+data_1_naMeans<-apply(data_1,2,naMean)
+table(data_1_naMeans)
+```
+
+From the table we can see that 67 columns have 98% NA values.
+
+To facilitate preprocessing the data set efficiently we create a function:
+
+```{r}
+naClean <- function(dataFrame,threshold=0.9){
+dataFrame_naMeans<-apply(dataFrame,2,naMean)
+return(data_out <-dataFrame[,dataFrame_naMeans<threshold])
+}
+data_2<- naClean(data_1)
+```
+
+We take a look at the data to understand if more preprocessing is required
+
+```{r,eval=FALSE}
+str(data_2)
+```
+
+Studying the data we can see that there exists a few columns that have some concerning values
+
+```{r}
+str(data_2$kurtosis_yaw_belt)
+table(data_2$kurtosis_yaw_belt)
+str(data_2$amplitude_yaw_dumbbell)
+table(data_2$amplitude_yaw_dumbbell)
+str(data_2$amplitude_yaw_belt)
+table(data_2$amplitude_yaw_belt)
+str(data_2$skewness_pitch_forearm)
+table(data_2$skewness_pitch_forearm)
+str(data_2$min_yaw_dumbbell)
+table(data_2$min_yaw_dumbbell)  
+```
+
+From this it is evident that the data has the following :
+
+1. Columns that are mostly NA values ~ 98%
+
+2. Columns that have very low data content
+   "" = 19216 + DIV/0! = 85 / 19622 (total data length)~ 98%
+   
+We thus append our data preprocessing function to include these columns
+
+```{r}
+naMean_2 <- function(x){
+  mean(x==""|is.na(x))
+}
+naClean_2 <- function(dataFrame,threshold=0.9){
+dataFrame_naMeans<-apply(dataFrame,2,naMean_2)
+return(data_out <-dataFrame[,dataFrame_naMeans<threshold])
+}
+training_1 <- naClean_2(data_1)
+```
+
+##Training and selecting the optimal classifier
+
+The resulting data is free from missing information and ready to process.
+We create a partition to allow for some data to be part of a Validation data set
+
+```{r}
+str(training_1)
+inTrain <- createDataPartition(training_1$classe,p=0.70,list = FALSE)
+training <- training_1[inTrain,]
+validation <- training_1[-inTrain,]
+```
+
+Important part of this computation is parallel processing, the function used is defined here.
+It outputs model run time that allows for us to make model selection decisions later on.
+
+```{r}
+# Parallel processing function,to help reduce runtime
+runparproc<-function(model.fun=x()){
+  require(parallel)
+  require(doParallel)
+  # convention to leave 1 core for OS
+  cluster <- makeCluster(detectCores() - 1) 
+  registerDoParallel(cluster)
+  ptm <- proc.time()
+  model.fun
+  elap <- proc.time() - ptm
+  stopCluster(cluster)
+  print(elap)
+}
+```
+
+To understand which model gives us the best measure of performance, we run 6 models with default training values and study the results. For this we use k-fold cross validation.
+
+We select the following models : GBM,SVM,RPART,RF,LDA,KNN
+
+In order save time, we run each model in a parallel processing function, detailed above and log the time to train ech model
+
+```{r,eval=TRUE,cache=TRUE}
+control_0 <- trainControl(method="repeatedcv",
+                        number=10,repeats=3)
+set.seed(7)
+# train the GBM model
+time_matrix <- rbind(time_gbm <- runparproc(modelGbm_0 <- train(classe~.,data=training,
+                  method="gbm", trControl=control_0,
+                  verbose=FALSE,metric="Accuracy")),
+# train the SVM model
+time_svm <- runparproc(modelSvm_0 <- train(classe~.,data=training,
+                  method="svmRadial", trControl=control_0,
+                  metric="Accuracy")),
+# train the rpart model
+time_rpart <- runparproc(modelrpart_0 <- train(classe~.,data=training,
+                  method="rpart", trControl=control_0,
+                  metric="Accuracy")),
+# train the randomforest model
+time_rf <- runparproc(modelrf_0 <- train(classe~.,data=training,
+                  method="rf", trControl=control_0,
+                  metric="Accuracy")),
+# train the LDA model
+time_lda <- runparproc(modelLda_0 <- train(classe~.,data=training,
+                  method="lda", trControl=control_0,
+                  metric="Accuracy")),
+# train the KNN model
+time_knn <- runparproc(modelknn_0 <- train(classe~.,data=training,
+                  method="knn", trControl=control_0,
+                  metric="Accuracy")))
+
+# collect resamples
+results_0 <- resamples(list(GBM=modelGbm_0,SVM=modelSvm_0,
+                            RP=modelrpart_0,RF=modelrf_0,
+                            LDA=modelLda_0,KNN = modelknn_0))
+#store summary
+res0Summary <- summary(results_0)
+eval_matrix <- cbind(as.data.frame(res0Summary$models),
+                    (as.data.frame(res0Summary$statistics$Accuracy)$Mean),
+                    (as.data.frame(res0Summary$statistics$Kappa)$Mean),
+                    time_matrix[,3])
+
+names(eval_matrix) <- c("Models","Accuracy","Kappa","runTimes")
+eval_matrix<-mutate(eval_matrix,timePerAccuracy= runTimes/(Accuracy*100))
+
+```
+
+Summarizing the results from the model evaluation
+
+```{r,cache=TRUE}
+# summarize the distributions results 0
+summary(results_0)
+# boxplots of results 0
+bwplot(results_0)
+# model selection matrix - results 0
+eval_matrix
+```
+
+From the matrix we can select the models for future evaluation in 2 steps.
+
+1. Selecting methods with Kappa above 80%
+
+2. Selecting the models with the best "Time per accuracy" -  % accuracy obtained for train time
+
+**Using this logic, we fine tune our models to just the KNN & GBM**
+
+The next step is to grid tuning the selected models to find the most optimal model for 
+our application
+
+
+We run the following cases _(See Appendix for model results)_:
+
+1. GBM Model with pca accounting for 95% of variance obtained
+
+2. GBM Model with no pca and grid tune length = 5
+
+3. KNN Model with pca , tune length = 10
+
+4. KNN Model with centering and scaling the data , tune length = 10
+
+```{r,eval=TRUE,cache=TRUE}
+control_1 <- trainControl(method="repeatedcv",
+                        number=10,repeats=3,
+                        preProcOptions = list(thresh=0.95))
+
+# train the GBM model - Only pca
+time_matrix_1 <- rbind(runparproc(modelGbm_1 <- train(classe~.,data=training,
+                  method="gbm", trControl=control_1,
+                  verbose=FALSE,metric="Accuracy",preProcess="pca")),
+# train the GBM model - length =5
+runparproc(modelGbm_2 <- train(classe~.,data=training,
+                  method="gbm", trControl=control_1,
+                  verbose=FALSE,metric="Accuracy",tuneLength=5)),
+# train the KNN model - pca , length 10
+runparproc(modelknn_1 <- train(classe~.,data=training,
+                  method="knn", trControl=control_1,
+                  metric="Accuracy",preProcess="pca",tuneLength=10)),
+# train the KNN model - center, scale, length 10
+runparproc(modelknn_2 <- train(classe~.,data=training,
+                  method="knn", trControl=control_1,
+                  metric="Accuracy",preProcess=c("center","scale"),tuneLength=10)))
+
+# collect resamples
+results_1 <- resamples(list(GBM_1= modelGbm_1,GBM_2= modelGbm_2,
+                            KNN_1= modelknn_1,KNN_2= modelknn_2))
+# summarize the distributions results 1
+res1Summary<-summary(results_1)
+
+eval_matrix_1 <- cbind(as.data.frame(res1Summary$models),
+                    (as.data.frame(res1Summary$statistics$Accuracy)$Mean),
+                    (as.data.frame(res1Summary$statistics$Kappa)$Mean),
+                    time_matrix_1[,3])
+
+names(eval_matrix_1) <- c("Models","Accuracy","Kappa","runTimes")
+eval_matrix_1<-mutate(eval_matrix_1,timePerAccuracy= runTimes/(Accuracy*100))
+
+# summary of results 1
+res1Summary
+
+# boxplots of results 1
+bwplot(results_1)
+
+# model selection matrix - results 1
+eval_matrix_1
+```
+
+From the results we see that KNN with centring and scaling offers us the best model in terms of
+accuracy and time per accuracy, we can test out of sample error using the validation set
+
+## Validation and Prediction
+
+```{r}
+knn_validation<-confusionMatrix(validation$classe,predict(modelknn_2,validation))
+knn_validation$overall[c(1,2)]
+```
+
+We can now proceeed to prediction with the test data set after preprocessing the data same as the training set 
+
+```{r}
+testing_1<-testing_0[,-c(1:7)]
+testing <- naClean_2(testing_1)
+predictions <- predict(modelknn_2,testing)
+predictions
+```
+
+These are the predicted values for the testing set and will be used in the quiz to verify accuracy.
+
+## Appendix
+
+```{r}
+# train the GBM model - Only pca
+modelGbm_1
+# train the GBM model - length =5
+modelGbm_2
+plot(modelGbm_2)
+# train the KNN model - pca , length 10
+modelknn_1
+plot(modelknn_1)
+# train the KNN model - center, scale, length 10
+modelknn_2
+plot(modelknn_2)
+```
